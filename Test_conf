@@ -1,0 +1,86 @@
+function prueba (){
+  var fecha = new Date("2023-05-16 15:50:00");
+  var trigger = ScriptApp.newTrigger('activadorDeFecha')
+    .timeBased()
+    .everyMinutes(1)
+    .after(10000000000000)
+    .create();
+}
+
+function verificarCoordenadas() {
+  var range = sheetRequest.getRange("B18:E468");
+  var values = range.getValues();
+  var filteredValues = values.filter(row => row.some(cell => cell !== ""));
+  
+  Logger.log(filteredValues);
+}
+
+function computeRouteMatrix(coordenadas, modoTransporte, fechaHora) {
+  // Create the request payload
+  var payload = {
+    "origins": [],
+    "destinations": [],
+    "travelMode": modoTransporte,
+    "routingPreference": "TRAFFIC_AWARE",
+    "departureTime": fechaHora.toISOString(),
+    "languageCode": "en-US",
+  };
+  
+  // Extract origins and destinations from the "coordenadas" array
+  coordenadas.forEach(function(coordenada) {
+    payload.origins.push({
+      "waypoint": {
+        "location": {
+          "latLng": {
+            "latitude": coordenada[0],
+            "longitude": coordenada[1]
+          }
+        }
+      }
+    });
+    
+    payload.destinations.push({
+      "waypoint": {
+        "location": {
+          "latLng": {
+            "latitude": coordenada[2],
+            "longitude": coordenada[3]
+          }
+        }
+      }
+    });
+  });
+  
+  // Send the POST request to the computeRoutes API
+  var response = UrlFetchApp.fetch("https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix", {
+    "method": "POST",
+    "payload": JSON.stringify(payload),
+    "headers": {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": "AIzaSyDfXAP_jiirXEQ7dzQryCNoD3p4osgiGP0",
+      "X-Goog-FieldMask": "originIndex,destinationIndex,status,distanceMeters,duration"
+    },
+    "muteHttpExceptions": true
+  });
+  
+  // Process the response
+  var responseData = JSON.parse(response.getContentText());
+  Logger.log(responseData);
+
+  // Log the calculated routes with the same originIndex and destinationIndex
+  responseData.forEach(function(route) {
+    var originIndex = route.originIndex;
+    var destinationIndex = route.destinationIndex;
+
+    // Check if the route has the same originIndex and destinationIndex
+    if (originIndex === destinationIndex) {
+      var distance = route.distanceMeters;
+      var duration = route.duration;
+      // Handle the distance and duration as needed
+      Logger.log("Route from origin index " + originIndex + " to destination index " + destinationIndex);
+      Logger.log("Distance: " + distance + " meters");
+      Logger.log("Duration: " + duration + " seconds");
+    }
+  });
+}
+  
