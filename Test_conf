@@ -1,85 +1,158 @@
-function prueba (){
-  var fecha = new Date("2023-05-16 15:50:00");
-  var trigger = ScriptApp.newTrigger('activadorDeFecha')
+function createTriggers() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("REQUEST");
+  var startLat = sheet.getRange("D3").getValue();
+  var startLng = sheet.getRange("D4").getValue();
+  var endLat = sheet.getRange("G3").getValue();
+  var endLng = sheet.getRange("G4").getValue();
+  var numTriggers = sheet.getRange("G8").getValue(); // Get the number of triggers from cell G8
+  var triggerDate = sheet.getRange("D6").getValue(); // Get the trigger date from cell D6
+  var triggerTime = sheet.getRange("G6").getValue(); // Get the trigger time from cell G6
+  var intervalMinutes = sheet.getRange("D8").getValue(); // Get the time interval in minutes from cell D8
+  var triggerDateTime = new Date(triggerDate + " " + triggerTime); // Set the first trigger time
+  var marginTriggerDateTime = new Date(triggerDateTime.getTime() - (2 * 60 * 1000)); // Subtract 2 minutes in milliseconds
+
+  var trigger = ScriptApp.newTrigger('getRoutes')
     .timeBased()
-    .everyMinutes(1)
-    .after(10000000000000)
+    .at(marginTriggerDateTime)
     .create();
+
+  // Get the trigger ID and store the associated parameters in a script property
+  var triggerId = trigger.getUniqueId();
+  var properties = PropertiesService.getScriptProperties();
+  properties.setProperty(triggerId, JSON.stringify({startLat: startLat, startLng: startLng, endLat: endLat, endLng: endLng, numTriggers: numTriggers, intervalMinutes: intervalMinutes, triggerDateTime: triggerDateTime}));
 }
 
-function verificarCoordenadas() {
-  var range = sheetRequest.getRange("B18:E468");
-  var values = range.getValues();
-  var filteredValues = values.filter(row => row.some(cell => cell !== ""));
-  
-  Logger.log(filteredValues);
-}
+function getRoutes(e) {
+  // Get the trigger ID from the event object
+  var triggerId = e.triggerUid;
 
-function computeRouteMatrix(coordenadas, modoTransporte, fechaHora) {
-  // Create the request payload
-  var payload = {
-    "origins": [],
-    "destinations": [],
-    "travelMode": modoTransporte,
-    "routingPreference": "TRAFFIC_AWARE",
-    "departureTime": fechaHora.toISOString(),
-    "languageCode": "en-US",
-  };
-  
-  // Extract origins and destinations from the "coordenadas" array
-  coordenadas.forEach(function(coordenada) {
-    payload.origins.push({
-      "waypoint": {
-        "location": {
-          "latLng": {
-            "latitude": coordenada[0],
-            "longitude": coordenada[1]
-          }
-        }
-      }
-    });
-    
-    payload.destinations.push({
-      "waypoint": {
-        "location": {
-          "latLng": {
-            "latitude": coordenada[2],
-            "longitude": coordenada[3]
-          }
-        }
-      }
-    });
-  });
-  
-  // Send the POST request to the computeRoutes API
-  var response = UrlFetchApp.fetch("https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix", {
-    "method": "POST",
-    "payload": JSON.stringify(payload),
-    "headers": {
-      "Content-Type": "application/json",
-      "X-Goog-Api-Key": "AIzaSyDfXAP_jiirXEQ7dzQryCNoD3p4osgiGP0",
-      "X-Goog-FieldMask": "originIndex,destinationIndex,status,distanceMeters,duration"
-    },
-    "muteHttpExceptions": true
-  });
-  
-  // Process the response
-  var responseData = JSON.parse(response.getContentText());
-  Logger.log(responseData);
+  // Retrieve the associated parameters from the script property
+  var properties = PropertiesService.getScriptProperties();
+  var triggerParams = JSON.parse(properties.getProperty(triggerId));
 
-  // Log the calculated routes with the same originIndex and destinationIndex
-  responseData.forEach(function(route) {
-    var originIndex = route.originIndex;
-    var destinationIndex = route.destinationIndex;
+  var intervalMinutes = triggerParams.intervalMinutes;
 
-    // Check if the route has the same originIndex and destinationIndex
-    if (originIndex === destinationIndex) {
-      var distance = route.distanceMeters;
-      var duration = route.duration;
-      // Handle the distance and duration as needed
-      Logger.log("Route from origin index " + originIndex + " to destination index " + destinationIndex);
-      Logger.log("Distance: " + distance + " meters");
-      Logger.log("Duration: " + duration + " seconds");
+  var triggers = ScriptApp.getProjectTriggers();
+
+  var trigger = ScriptApp.newTrigger('newRoute')
+    .timeBased()
+    .everyMinutes(intervalMinutes)
+    .create();
+
+  var newTriggerId = trigger.getUniqueId();
+  properties.setProperty(newTriggerId, properties.getProperty(triggerId));
+
+  // Delete the trigger
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getUniqueId() == triggerId) {
+      ScriptApp.deleteTrigger(triggers[i]);
+      break;
     }
-  });
+  }
+}
+
+function newRoute(e){
+  // Get the trigger ID from the event object
+  var triggerId = e.triggerUid;
+
+  // Retrieve the associated parameters from the script property
+  var properties = PropertiesService.getScriptProperties();
+
+  var triggerParams = JSON.parse(properties.getProperty(triggerId));
+  var startLat = triggerParams.startLat;
+  var startLng = triggerParams.startLng;
+  var endLat = triggerParams.endLat;
+  var endLng = triggerParams.endLng;
+  var numTriggers = triggerParams.numTriggers;
+  var triggerDateTime = new Date(triggerParams.triggerDateTime);
+
+  if (numTriggers > 0) {
+    // Construct the request body for the computeRoutes API
+    var requestBody = {
+      "origin":{
+        "location":{
+          "latLng":{
+            "latitude": startLat,
+            "longitude": startLng
+          }
+        }
+      },
+      "destination":{
+        "location":{
+          "latLng":{
+            "latitude": endLat,
+            "longitude": endLng
+          }
+        }
+      },
+      "travelMode": "DRIVE",
+      "extraComputations": ["TRAFFIC_ON_POLYLINE"],
+      "routingPreference": "TRAFFIC_AWARE",
+      "departureTime": triggerDateTime.toISOString(),
+      "computeAlternativeRoutes": false,
+      "routeModifiers": {
+        "avoidTolls": false,
+        "avoidHighways": false,
+        "avoidFerries": false
+      },
+      "languageCode": "en-US",
+      "units": "METRIC"
+    };
+
+    // Send the POST request to the computeRoutes API
+    var response = UrlFetchApp.fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
+      "method": "POST",
+      "payload": JSON.stringify(requestBody),
+      "headers": {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": "AIzaSyDfXAP_jiirXEQ7dzQryCNoD3p4osgiGP0",
+        "X-Goog-FieldMask": "routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline,routes.travelAdvisory,routes.legs.travelAdvisory"
+      },
+      "muteHttpExceptions": true
+    });
+
+    // Parse the response body
+    var responseBody = JSON.parse(response.getContentText());
+    Logger.log(responseBody);
+    
+    writeToJSONSheet(triggerParams, responseBody);
+
+    triggerParams.numTriggers = triggerParams.numTriggers - 1; 
+  }
+  else {
+    // Delete the trigger
+    var triggers = ScriptApp.getProjectTriggers();
+    for (var i = 0; i < triggers.length; i++) {
+      if (triggers[i].getUniqueId() == triggerId) {
+        ScriptApp.deleteTrigger(triggers[i]);
+        break;
+      }
+    }
+  }
+}
+
+function writeToJSONSheet(triggerParams, responseBody) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("JSON");
+  var firstEmptyRow = sheet.getLastRow() + 1;
+  
+  var triggerDateTime = new Date(triggerParams.triggerDateTime);
+  var startLat = triggerParams.startLat;
+  var startLng = triggerParams.startLng;
+  var endLat = triggerParams.endLat;
+  var endLng = triggerParams.endLng;
+  
+  var distance = responseBody.routes[0].distanceMeters;
+  var duration = responseBody.routes[0].duration;
+
+  Logger.log(responseBody.routes[0].legs[0].distanceMeters);
+  Logger.log(responseBody.routes[0].legs[0].duration);
+
+  sheet.getRange(firstEmptyRow, 1).setValue(triggerDateTime.toLocaleDateString());
+  sheet.getRange(firstEmptyRow, 2).setValue(triggerDateTime.toLocaleTimeString());
+  sheet.getRange(firstEmptyRow, 3).setValue(startLat);
+  sheet.getRange(firstEmptyRow, 4).setValue(startLng);
+  sheet.getRange(firstEmptyRow, 5).setValue(endLat);
+  sheet.getRange(firstEmptyRow, 6).setValue(endLng);
+  sheet.getRange(firstEmptyRow, 7).setValue(distance);
+  sheet.getRange(firstEmptyRow, 8).setValue(duration);
 }
